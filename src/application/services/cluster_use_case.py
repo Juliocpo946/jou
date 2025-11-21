@@ -3,6 +3,7 @@ from uuid import UUID
 from datetime import date
 import numpy as np
 
+from src.domain.services.clustering_service import ClusteringService
 from src.domain.services.ml_clustering_model import MLClusteringModel
 from src.infrastructure.persistence.animal_repository_impl import AnimalRepositoryImpl
 from src.infrastructure.persistence.event_repository_impl import EventRepositoryImpl
@@ -52,10 +53,7 @@ class ClusterUseCase:
                         if features is not None:
                             lote_features.append(features[0])
                             
-                            sorted_events = sorted(other_weight_events, key=lambda x: x[0])
-                            weights = np.array([float(e[1]) for e in sorted_events])
-                            dates = np.array([e[0] for e in sorted_events])
-                            gdp = MLClusteringModel._calculate_gdp(weights, dates)
+                            gdp = ClusteringService.calculate_gdp(other_weight_events)
                             lote_gdps.append(gdp)
 
                 if not lote_features or len(lote_features) < 3:
@@ -80,15 +78,16 @@ class ClusterUseCase:
                         scaler
                     )
 
-                    cluster_characteristics = {
-                        "gdps": lote_gdps,
-                        "all_gdps": lote_gdps
-                    }
-
-                    cluster_label, explanation = MLClusteringModel.map_cluster_to_label(
-                        cluster_num,
-                        cluster_characteristics
+                    lote_percentiles = ClusteringService.calculate_lote_percentiles(lote_gdps)
+                    
+                    cluster_label, service_conf, explanation = ClusteringService.calculate_cluster_label(
+                        animal,
+                        weight_events,
+                        lote_percentiles,
+                        animal.health_score
                     )
+                    
+                    confidence = (confidence + service_conf) / 2
 
                     breeding_events = await self.event_repo.find_breeding_events(animal_id, days_back=365)
                     birth_events = await self.event_repo.find_birth_events(animal_id, days_back=365)
@@ -103,10 +102,10 @@ class ClusterUseCase:
                     else:
                         calving_interval = 0
 
-                    repro_label, repro_conf, repro_explanation = MLClusteringModel.analyze_reproductive_status(
+                    repro_label, repro_conf, repro_explanation = ClusteringService.evaluate_reproductive_status(
+                        animal,
                         days_open,
-                        calving_interval,
-                        len(breeding_events)
+                        calving_interval
                     )
 
                     if repro_label == "REPRO_PROBLEMA":

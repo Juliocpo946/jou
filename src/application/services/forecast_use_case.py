@@ -3,6 +3,7 @@ from uuid import UUID
 from datetime import date
 import numpy as np
 
+from src.domain.services.forecasting_service import ForecastingService
 from src.domain.services.ml_forecasting_model import MLForecastingModel
 from src.infrastructure.persistence.animal_repository_impl import AnimalRepositoryImpl
 from src.infrastructure.persistence.event_repository_impl import EventRepositoryImpl
@@ -46,14 +47,10 @@ class ForecastUseCase:
                         days_arr, weights_arr, polynomial_degree=1
                     )
                     
-                    predicted_sale_date, sale_confidence = MLForecastingModel.predict_sale_date(
+                    predicted_sale_date, sale_confidence = ForecastingService.forecast_sale_date(
                         current_weight,
-                        production_goals.target_sale_weight_kg,
-                        linear_model,
-                        None,
-                        days_arr,
-                        date.today(),
-                        r2_linear if r2_linear else 0.7
+                        ForecastingService.calculate_gdp_30days(weight_events),
+                        production_goals.target_sale_weight_kg
                     )
 
                     projected_weight_30d, weight_confidence = MLForecastingModel.predict_weight_30days(
@@ -70,28 +67,22 @@ class ForecastUseCase:
                 predicted_sale_date, sale_confidence = None, 0.0
                 projected_weight_30d, weight_confidence = None, 0.0
 
-            expected_calving_date, calving_confidence = MLForecastingModel.forecast_calving_window(
+            expected_calving_date, calving_confidence = ForecastingService.forecast_calving_date(
                 animal.last_insemination_date,
-                repro_settings.avg_gestation_days,
-                0.65,
-                date.today()
+                repro_settings.avg_gestation_days
             )
 
             if expected_calving_date:
-                suggested_dry_date, dry_confidence = MLForecastingModel.forecast_calving_window(
-                    animal.last_insemination_date,
-                    repro_settings.avg_gestation_days - repro_settings.days_to_dry_off,
-                    0.70,
-                    date.today()
+                suggested_dry_date, dry_confidence = ForecastingService.forecast_dry_off_date(
+                    expected_calving_date,
+                    repro_settings.days_to_dry_off
                 )
             else:
                 suggested_dry_date, dry_confidence = None, 0.0
 
-            next_likely_heat_date, heat_confidence = MLForecastingModel.predict_breeding_window(
+            next_likely_heat_date, heat_confidence = ForecastingService.forecast_next_heat_date(
                 animal.last_heat_date,
-                repro_settings.estrus_cycle_days,
-                0.65,
-                date.today()
+                repro_settings.estrus_cycle_days
             )
 
             age_days = (date.today() - animal.birth_date).days if animal.birth_date else 365
@@ -99,7 +90,7 @@ class ForecastUseCase:
             breeding_events = await self.event_repo.find_breeding_events(animal_id, days_back=365)
             
             if animal.last_birth_date:
-                days_open = (date.today() - animal.last_birth_date).days
+                days_open = ForecastingService.calculate_days_open(animal.last_birth_date)
             else:
                 days_open = 0
 
